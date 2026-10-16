@@ -1,0 +1,22 @@
+plugins/jev-judge/__init__.py
+  h_c5be3b3dad7ca8 41-48,56-57
+plugins/jev-judge/gate.py
+  h_c5be3b3dad7ca8 32,45-49,52,58-72,82
+plugins/jev-judge/jev.py
+  h_c5be3b3dad7ca8 26,28,224-227,278-283,290,297,304,306,308,314,317-319,364,368,372-378,381-385
+plugins/jev-judge/plugin.yaml
+  h_c5be3b3dad7ca8 15-18,45,55
+plugins/jev-judge/tools.py
+  h_c5be3b3dad7ca8 47-50,53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.7.6",
+  "base_commit_sha": "bdb10e63f2c28f32543ee67c64a2909d1fbb2908",
+  "prompts": {},
+  "humans": {
+    "h_c5be3b3dad7ca8": {
+      "author": "Phil Beyer <6152278+pjbeyer@users.noreply.github.com>"
+    }
+  }
+}
