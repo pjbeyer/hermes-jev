@@ -1,0 +1,25 @@
+plugins/jev-judge/destination.py
+  s_5c29cf94de1cce::t_bcbbd937e6db03 1-76,86-208,210-360
+  s_5c29cf94de1cce::t_fca24c3cae03ad 77-85
+  s_5c29cf94de1cce::t_880ff4ddd4ec20 209
+  s_5c29cf94de1cce::t_bee5a9ba7175d2 361-363
+plugins/jev-judge/tests/test_destination.py
+  s_5c29cf94de1cce::t_c04144a72e006d 1-323
+  s_5c29cf94de1cce::t_06904bfa40d392 324-325
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.7.6",
+  "base_commit_sha": "aa7a86d824952bcb89b52985b9ad82f0406db1cd",
+  "prompts": {},
+  "sessions": {
+    "s_5c29cf94de1cce": {
+      "agent_id": {
+        "tool": "hermes",
+        "id": "20261016_073945_d813bedc",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "Phil Beyer <6152278+pjbeyer@users.noreply.github.com>"
+    }
+  }
+}
