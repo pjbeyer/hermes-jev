@@ -38,7 +38,14 @@ def register(ctx):
             s = gate.settings_for(ctx)
             if tool_name not in _tool_list(s["tools"]):
                 return None
-            verdict = gate.judge(gate.client_for(s), tool_name, args or {}, s)
+            # Cron exemption: no human can answer an approval prompt in a cron
+            # run, so an enforce escalation would be auto-denied by
+            # approvals.cron_mode and hard-block the call. Skip judging there —
+            # the ordinary dangerous-command guards still apply.
+            if s.get("cron_exempt", True) and gate._is_cron_context(task_id):
+                return None
+            client = gate.client_for(s)
+            verdict = gate.judge(client, tool_name, args or {}, s)
             if verdict is None:  # fail-open: no key, timeout, 429, transport error
                 gate.log_decision(
                     s["log_path"],
@@ -46,6 +53,8 @@ def register(ctx):
                         "source": "gate",
                         "tool": tool_name,
                         "outcome": "fail_open",
+                        # Why it failed — without this the line cannot be triaged.
+                        "reason": getattr(client, "last_error", None) or "unknown",
                         "task_id": task_id,
                     },
                 )

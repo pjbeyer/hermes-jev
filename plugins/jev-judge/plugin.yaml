@@ -12,6 +12,10 @@ config_schema:
     type: str
     default: "shadow"
     description: "shadow = log only; enforce = escalate triggered calls to the approval gate"
+  cron_exempt:
+    type: bool
+    default: true
+    description: "Skip judging inside cron runs (no human to answer the approval gate; approvals.cron_mode would auto-deny and hard-block the call)"
   tools:
     type: list
     default: ["terminal", "write_file", "patch"]
@@ -38,7 +42,7 @@ config_schema:
     default: "typesafe-ai/jev"
   jev_base_url:
     type: str
-    default: "https://ai-gateway.vercel.sh/v4/ai"
+    default: "https://litellm.shared.getflex.org/typesafe"
   backend:
     type: str
     default: "auto"
@@ -48,7 +52,7 @@ config_schema:
     default: "jev-latest"
   typesafe_base_url:
     type: str
-    default: "https://api.typesafe.ai"
+    default: "https://litellm.shared.getflex.org/typesafe"
   retry_max_wait_s:
     type: float
     default: 2.0

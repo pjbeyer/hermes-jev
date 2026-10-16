@@ -23,9 +23,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE_URL = "https://ai-gateway.vercel.sh/v4/ai"
+DEFAULT_BASE_URL = "https://litellm.shared.getflex.org/typesafe"
 DEFAULT_MODEL = "typesafe-ai/jev"
-DEFAULT_TYPESAFE_BASE_URL = "https://api.typesafe.ai"
+DEFAULT_TYPESAFE_BASE_URL = "https://litellm.shared.getflex.org/typesafe"
 DEFAULT_TYPESAFE_MODEL = "jev-latest"
 PROTOCOL_VERSION = "0.0.1"
 SPEC_VERSION = "4"
@@ -221,6 +221,10 @@ class JevClient:
         self.breaker_cooldown_s = float(breaker_cooldown_s)
         self.min_interval_s = float(min_interval_s)
         self._cache: dict[str, tuple[float, dict]] = {}
+        # Why the last evaluate() failed, for fail_open diagnostics. None when
+        # the last call succeeded. Every fail-open path sets this; without it a
+        # fail_open log line carries no cause and cannot be triaged.
+        self.last_error: str | None = None
         # Seams for offline tests (transport stub, clock mock).
         self._urlopen = urllib.request.urlopen
         self._clock = time.monotonic
@@ -271,50 +275,48 @@ class JevClient:
         with self._urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read())
 
+    def _fail(self, reason: str):
+        """Record why a call failed (for fail_open diagnostics) and return None."""
+        self.last_error = reason
+        logger.debug("jev-judge: fail-open (%s)", reason)
+        return None
+
     def _post_json(self, url: str, data: bytes, headers: dict):
         """POST with a single rate-limit retry. Returns the body or None."""
         try:
             body = self._send(url, data, headers)
         except urllib.error.HTTPError as exc:
             if exc.code not in RATE_LIMIT_CODES:
-                logger.debug(
-                    "jev-judge: evaluate failed (%s): %s", type(exc).__name__, exc
-                )
-                return None
+                return self._fail(f"http_{exc.code}")
             self._note_ratelimit(url)
             wait = retry_after_s(
                 exc.headers.get("retry-after") if exc.headers else None,
                 time.time(),
             )
             if wait is None or wait > self.retry_max_wait_s:
-                return None  # fail-open: no (or too long a) wait instructed
+                return self._fail(f"ratelimit_no_retry_{exc.code}")
             if wait > 0:
                 self._sleep(wait)
             try:
                 body = self._send(url, data, headers)
             except urllib.error.HTTPError as exc2:
                 # Counted once per evaluate (first 429/529 above); no double note.
-                logger.debug(
-                    "jev-judge: retry failed (%s): %s", type(exc2).__name__, exc2
-                )
-                return None
+                return self._fail(f"ratelimit_retry_failed_{exc2.code}")
             except Exception as exc2:  # timeout, network, parse — fail-open
-                logger.debug(
-                    "jev-judge: retry failed (%s): %s", type(exc2).__name__, exc2
-                )
-                return None
+                return self._fail(f"retry_{type(exc2).__name__}")
         except Exception as exc:  # timeout, 5xx, network, parse — always fail-open
-            logger.debug("jev-judge: evaluate failed (%s): %s", type(exc).__name__, exc)
-            return None
+            return self._fail(f"{type(exc).__name__}")
         self._note_success(url)
         return body
 
     def evaluate(self, state, questions: dict) -> dict | None:
         """Return {"answers", "confidence", "cost", "latency_ms", "usage"} or None."""
+        self.last_error = None
         backend, key = self._resolve()
         if backend is None or not key:
-            logger.debug("jev-judge: no key for backend; skipping")
-            return None
+            return self._fail(
+                "no_backend_key" if backend is None else "empty_key"
+            )
 
         cache_key = hashlib.sha256(
             json.dumps(
@@ -359,19 +361,28 @@ class JevClient:
                 "content-type": "application/json",
             }
         if self._breaker_open(endpoint):
-            logger.debug("jev-judge: breaker open for %s; skipping", endpoint)
-            return None
+            return self._fail("breaker_open")
         started = self._clock()
         body = self._post_json(endpoint, payload, headers)
         if body is None:
-            return None
+            return None  # _post_json already recorded last_error
 
         if backend == "typesafe":
             raw_answers = body.get("answers", {})
+            # The gateway may return provider metadata under either casing:
+            # Vercel uses camelCase ("providerMetadata"); the Flex gateway uses
+            # snake_case ("provider_metadata"). Read both, or cost telemetry
+            # silently disappears (all costs logged as null).
+            pmeta = body.get("provider_metadata") or body.get("providerMetadata") or {}
+            gw_meta = pmeta.get("gateway", {}) or {}
+            ts_meta = pmeta.get("typesafe", {}) or {}
             result = {
                 "answers": normalize_typesafe_answers(raw_answers),
-                "confidence": typesafe_confidence(raw_answers),
-                "cost": None,  # TypeSafe direct reports usage in tokens, no $ cost
+                "confidence": typesafe_confidence(raw_answers) or ts_meta.get(
+                    "confidence", {}
+                ),
+                # gatewayCost includes the ZDR surcharge; marketCost is inference only.
+                "cost": gw_meta.get("gatewayCost") or gw_meta.get("cost"),
                 "usage": body.get("usage"),
                 "latency_ms": round((self._clock() - started) * 1000),
             }

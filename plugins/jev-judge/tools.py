@@ -44,10 +44,13 @@ def jev_ask(args: dict, **kwargs) -> str:
     client, log_path = _client_and_log_path()
     result = client.evaluate(state, questions)
     if not result:
-        log_decision(log_path, {"source": "ask", "outcome": "fail_open"})
+        reason = getattr(client, "last_error", None) or "unknown"
+        log_decision(
+            log_path, {"source": "ask", "outcome": "fail_open", "reason": reason}
+        )
         return json.dumps(
             {
-                "error": "Jev unavailable (no key, timeout, or transport error)",
+                "error": f"Jev unavailable ({reason})",
                 "note": "fail-open: proceed without this judgment",
             }
         )

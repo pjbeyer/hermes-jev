@@ -29,7 +29,7 @@ def settings_for(ctx) -> dict:
         "backend": ctx.get_config("backend", default="auto"),
         "typesafe_model": ctx.get_config("typesafe_model", default="jev-latest"),
         "typesafe_base_url": ctx.get_config(
-            "typesafe_base_url", default="https://api.typesafe.ai"
+            "typesafe_base_url", default="https://litellm.shared.getflex.org/typesafe"
         ),
         "retry_max_wait_s": ctx.get_config("retry_max_wait_s", default=2.0),
         "breaker_threshold": ctx.get_config("breaker_threshold", default=3),
@@ -42,12 +42,32 @@ def settings_for(ctx) -> dict:
             "exfiltration_threshold", default=0.70
         ),
         "impact_threshold": ctx.get_config("impact_threshold", default=2.5),
+        # Cron jobs have no human to answer an approval prompt, so an enforce-mode
+        # escalation there is auto-DENIED by approvals.cron_mode and hard-blocks the
+        # tool call. Default: skip judging entirely in cron, leaving the dangerous-
+        # command guards (which cron_mode also governs) fully intact.
+        "cron_exempt": ctx.get_config("cron_exempt", default=True),
         "jev_model": ctx.get_config("jev_model", default="typesafe-ai/jev"),
         "jev_base_url": ctx.get_config(
-            "jev_base_url", default="https://ai-gateway.vercel.sh/v4/ai"
+            "jev_base_url", default="https://litellm.shared.getflex.org/typesafe"
         ),
         "log_path": ctx.get_config("log_path", default=""),
     }
+
+
+def _is_cron_context(task_id=None) -> bool:
+    """True when this tool call is running inside a cron job.
+
+    Two independent signals, either sufficient: Hermes exports
+    HERMES_CRON_SESSION for cron runs, and cron task ids are namespaced
+    ``cron:<job>:<run>``. Checking both means the exemption still holds if
+    either signal is absent.
+    """
+    if str(task_id or "").startswith("cron:"):
+        return True
+    return str(os.environ.get("HERMES_CRON_SESSION", "")).strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def client_for(s: dict) -> JevClient:
@@ -59,7 +79,7 @@ def client_for(s: dict) -> JevClient:
         int(s["cache_seconds"]),
         str(s.get("backend", "auto")),
         str(s.get("typesafe_model", "jev-latest")),
-        str(s.get("typesafe_base_url", "https://api.typesafe.ai")),
+        str(s.get("typesafe_base_url", "https://litellm.shared.getflex.org/typesafe")),
         float(s.get("retry_max_wait_s", 2.0)),
         int(s.get("breaker_threshold", 3)),
         float(s.get("breaker_cooldown_s", 120)),
