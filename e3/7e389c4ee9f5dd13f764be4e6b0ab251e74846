@@ -1,0 +1,19 @@
+UPSTREAM.md
+  s_5c29cf94de1cce::t_5c55c65338ad92 1-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.7.6",
+  "base_commit_sha": "e37e389c4ee9f5dd13f764be4e6b0ab251e74846",
+  "prompts": {},
+  "sessions": {
+    "s_5c29cf94de1cce": {
+      "agent_id": {
+        "tool": "hermes",
+        "id": "20261016_073945_d813bedc",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "Phil Beyer <6152278+pjbeyer@users.noreply.github.com>"
+    }
+  }
+}
