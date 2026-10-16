@@ -80,7 +80,8 @@
     "rules": [
       "dispara por sinal em LADDER_ORDER quando signal >= threshold correspondente",
       "se reads_secrets e sends_outbound dispararam, anexa 'exfiltration' por último (rótulo derivado, nunca perguntado)",
-      "a policy nunca remove disparo"
+      "a policy nunca remove disparo",
+      "untrusted_destination é anexado por último quando sends_outbound disparou e o destino computado está fora da allowlist; a policy nunca remove disparo"
     ]
   },
   "verdict_ok": {
@@ -97,14 +98,34 @@
   },
   "fail_open": {
     "outcome": "fail_open",
-    "transport_reasons": ["no_key", "timeout", "breaker", "http_<status>", "transport", "parse", "payload_too_large"],
-    "answer_reasons": ["answer_missing"],
+    "transport_reasons": [
+      "no_key",
+      "timeout",
+      "breaker",
+      "http_<status>",
+      "transport",
+      "parse",
+      "payload_too_large"
+    ],
+    "answer_reasons": [
+      "answer_missing"
+    ],
     "answer_missing": "qualquer pergunta sem resposta numérica usável (ausente, renomeada, malformada, bool) -> nunca 'clear', nunca 0.0; 'missing' lista os ids, 'signals' carrega os parciais"
   },
-  "hook_outcomes": ["clear", "flagged_shadow", "escalated", "fail_open", "error"],
+  "hook_outcomes": [
+    "clear",
+    "flagged_shadow",
+    "escalated",
+    "fail_open",
+    "error"
+  ],
   "settings": {
     "mode": "shadow",
-    "tools": ["terminal", "write_file", "patch"],
+    "tools": [
+      "terminal",
+      "write_file",
+      "patch"
+    ],
     "timeout_s": 3.0,
     "cache_seconds": 300,
     "backend": "auto",
@@ -124,7 +145,8 @@
     "self_advocating_threshold": 0.7,
     "jev_model": "typesafe-ai/jev",
     "jev_base_url": "https://ai-gateway.vercel.sh/v4/ai",
-    "log_path": ""
+    "log_path": "",
+    "dest_allowlist": []
   },
   "wire_notes": {
     "boolean": "interno boolean <-> noul no fio TypeSafe; resposta normalizada para {probability}",
@@ -132,11 +154,30 @@
     "gate_version_default": "código default v1 (tripla congelada destructive/exfiltration/impact); settings com gate_version=v2 rodam a escada"
   },
   "v1_compat": {
-    "questions": ["destructive", "exfiltration", "impact"],
+    "questions": [
+      "destructive",
+      "exfiltration",
+      "impact"
+    ],
     "thresholds": {
       "destructive_threshold": 0.9,
       "exfiltration_threshold": 0.7,
       "impact_threshold": 2.5
+    }
+  },
+  "derived_signals": {
+    "untrusted_destination": {
+      "asked": false,
+      "computed_in": "plugins/jev-judge/destination.py",
+      "rule": "sends_outbound disparou E o host de destino está fora da allowlist do operador (dest_allowlisted == False). Nunca dispara com destino desconhecido.",
+      "why_not_asked": "O modelo julga intenção; a allowlist é comparação contra configuração do operador. Perguntar ao modelo a segunda metade custaria uma pergunta e um round trip por zero informação, e deixaria um fato computado como consultivo em vez de autoritativo.",
+      "inert_by_default": "Sem allowlist configurada o veredito é None, então o sinal é estruturalmente incapaz de disparar e o gate se comporta exatamente como antes.",
+      "wire_fields": [
+        "dest_known",
+        "dest_allowlisted"
+      ],
+      "not_transmitted": "dest_host (fica só no log local de decisão)",
+      "polarity": "dest_allowlisted é uma PERMISSÃO: desconhecido (None) significa NÃO permitido, nunca seguro. Allowlist vazia é ausência de política, não deny-list."
     }
   }
 }

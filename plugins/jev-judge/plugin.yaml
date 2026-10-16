@@ -37,6 +37,10 @@ config_schema:
     type: str
     default: "v1"
     description: "v1 = legacy triple (compat); v2 = separated signals + deterministic ladder (opt-in)"
+  dest_allowlist:
+    type: list
+    default: []
+    description: "Hosts this installation treats as approved destinations, matched on label boundaries so 'github.com' also covers 'api.github.com'. Empty means no policy: the derived untrusted_destination signal cannot fire and the gate is unchanged. Only used by gate v2."
   reads_secrets_threshold:
     type: float
     default: 0.70

@@ -15,6 +15,8 @@ import json
 import logging
 import math
 import os
+
+from . import destination as _destination
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +57,9 @@ def settings_for(ctx) -> dict:
         ),
         "impact_threshold": ctx.get_config("impact_threshold", default=2.5),
         "gate_version": ctx.get_config("gate_version", default="v1"),
+        # Operator configuration, empty by default. Empty means no policy, so the derived
+        # destination signal cannot fire and the gate is unchanged.
+        "dest_allowlist": ctx.get_config("dest_allowlist", default=[]),
         "reads_secrets_threshold": ctx.get_config(
             "reads_secrets_threshold", default=0.70
         ),
@@ -193,6 +198,23 @@ GATE_QUESTIONS_V2 = {
     "impact": GATE_QUESTIONS["impact"],
 }
 
+#: The derived signal for egress to a host the operator did not approve.
+#:
+#: This is not a question. It is composed in code from two things the gate already has:
+#: ``sends_outbound``, which only the model can judge because it is a reading of intent, and the
+#: allowlist verdict, which only code can judge because it is a comparison against operator
+#: configuration. Asking the model to restate the second half would add a question and a round
+#: trip for no information, and would leave a computed fact advisory rather than authoritative.
+#:
+#: It fires only when both halves are affirmative. Either half alone is already covered:
+#: ``sends_outbound`` alone is ordinary egress, and an unapproved destination with nothing
+#: leaving the machine is not egress at all. An unknown destination never fires it, because
+#: "could not determine" is not evidence of misbehaviour and the six signals already handle it.
+#:
+#: With no allowlist configured the allowlist verdict is None, so this signal is structurally
+#: incapable of firing and the gate behaves exactly as it did before it existed.
+UNTRUSTED_DESTINATION_SIGNAL = "untrusted_destination"
+
 # Fixed ladder order: self-advocacy first so a command never talks its way
 # past the gate; the deterministic policy runs LAST and only ever adds.
 LADDER_ORDER = [
@@ -235,14 +257,37 @@ def apply_policy(triggered: list, signals: dict, thresholds: dict) -> list:
     return out
 
 
-def ladder_triggers(signals: dict, thresholds: dict) -> list:
-    """Per-signal triggers in LADDER_ORDER, then the policy (last)."""
+def apply_destination_policy(triggered: list, untrusted: bool) -> list:
+    """Append the derived destination label. Additive only, like ``apply_policy``.
+
+    Never removes a trigger, and the caller only passes True for a destination the code
+    positively determined to be outside the allowlist. So this can only ever make the gate
+    stricter about egress the model already flagged as leaving the machine.
+
+    The label goes in ``triggered``, not in ``signals``. ``signals`` is the six numeric signals
+    the model answered, and both the contract and the frozen v2 test pin it to exactly six. A
+    derived label belongs where the policy's existing ``exfiltration`` label already lives: in
+    ``triggered`` only, which is asserted to be free of ``signals`` entries.
+    """
+    out = list(triggered)
+    if untrusted and UNTRUSTED_DESTINATION_SIGNAL not in out:
+        out.append(UNTRUSTED_DESTINATION_SIGNAL)
+    return out
+
+
+def ladder_triggers(signals: dict, thresholds: dict, untrusted: bool = False) -> list:
+    """Per-signal triggers in LADDER_ORDER, then the policies (last).
+
+    ``untrusted`` carries the code-computed destination verdict, which has no threshold and is
+    not in LADDER_ORDER: it is derived from the allowlist rather than judged from an answer, so
+    it is appended after the ladder rather than positioned within it.
+    """
     triggered = [
         qid
         for qid in LADDER_ORDER
-        if signals[qid] >= thresholds[_THRESHOLD_BY_SIGNAL[qid]]
+        if signals.get(qid, 0.0) >= thresholds[_THRESHOLD_BY_SIGNAL[qid]]
     ]
-    return apply_policy(triggered, signals, thresholds)
+    return apply_destination_policy(apply_policy(triggered, signals, thresholds), untrusted)
 
 
 def invert_criteria(criteria: list) -> list:
@@ -274,14 +319,32 @@ def scores_mirror(a, b, scale_max: float = SCORE_SCALE_MAX, tol: float = 0.5) ->
         return False
 
 
-def build_state(tool_name: str, args: dict) -> dict:
-    """Compact, redacted view of the call — this is everything Jev sees."""
-    return {
+def build_state(tool_name: str, args: dict, dest=None) -> dict:
+    """Compact, redacted view of the call — this is everything Jev sees.
+
+    ``dest`` adds a code-computed destination verdict when one is available. Only the two flags
+    are transmitted; the host itself is not, because the separation comes from the allowlist
+    verdict rather than the hostname and this plugin's egress surface stays booleans.
+    """
+    state = {
         "action": {
             "tool": tool_name,
             "arguments": {k: redact(v, 600) for k, v in list(args.items())[:12]},
         }
     }
+    if dest is not None:
+        state.update(dest.as_state_field())
+    return state
+
+
+def _cwd_from(args) -> str | None:
+    """The working directory of the call, when the host supplies one."""
+    if isinstance(args, dict):
+        for key in ("cwd", "working_dir", "workdir"):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return None
 
 
 def extract_signals(answers: dict, questions: dict) -> tuple[dict, list]:
@@ -384,7 +447,13 @@ def judge_v2(
     unanswered -> answer_missing, never clear, never 0.0). The verdict
     exposes the separated signals plus the ladder order used.
     """
-    result = client.evaluate(build_state(tool_name, args), GATE_QUESTIONS_V2)
+    dest = _destination.resolve_destination(
+        tool_name=tool_name,
+        args=args,
+        allowlist=_destination.parse_allowlist(thresholds.get("dest_allowlist")),
+        cwd=_cwd_from(args),
+    )
+    result = client.evaluate(build_state(tool_name, args, dest), GATE_QUESTIONS_V2)
     if not result:
         return {
             "tool": tool_name,
@@ -408,14 +477,22 @@ def judge_v2(
                 entry[key] = result[key]
         return entry
     thresholds = {**DEFAULTS_V2, **(thresholds or {})}
+    # Computed AFTER the missing-answer check, so a missing model answer still fails open
+    # rather than being masked by a fact the code computed. `signals` stays at the six the model
+    # answered; the derived verdict travels as `untrusted` and in the `destination` fact.
+    untrusted = bool(
+        dest.untrusted
+        and signals.get("sends_outbound", 0.0) >= thresholds["sends_outbound_threshold"]
+    )
     return {
         "tool": tool_name,
         "gate_version": "v2",
         "signals": signals,
+        "destination": dest.as_event(),
         "probabilities": dict(signals),  # alias: log parsers read this key
         "confidence": result.get("confidence", {}),
         "thresholds": {k: thresholds[k] for k in DEFAULTS_V2},
-        "triggered": ladder_triggers(signals, thresholds),
+        "triggered": ladder_triggers(signals, thresholds, untrusted),
         "ladder": list(LADDER_ORDER),
         "latency_ms": result.get("latency_ms"),
         "cost": result.get("cost"),
